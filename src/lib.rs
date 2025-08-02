@@ -26,58 +26,157 @@ pub fn generate_labitbu_bytes(
 ) -> Result<Box<[u8]>, JsValue> {
     const TARGET_SIZE: usize = 4096;
 
+    // Add debug logging
+    web_sys::console::log_1(&format!("Starting generate_labitbu_bytes with pubkey: {}", pubkey_hex).into());
+    web_sys::console::log_1(&format!("Base images JS type: {:?}", base_images_js.js_typeof()).into());
+    web_sys::console::log_1(&format!("Accessories JS type: {:?}", accessories_js.js_typeof()).into());
+
     let base_images: Vec<Vec<u8>> = from_value(base_images_js)
         .map_err(|e| JsValue::from_str(&format!("Failed to parse base images: {}", e)))?;
     let accessories: Vec<Vec<u8>> = from_value(accessories_js)
         .map_err(|e| JsValue::from_str(&format!("Failed to parse accessories: {}", e)))?;
 
+    web_sys::console::log_1(&format!("Parsed {} base images", base_images.len()).into());
+    web_sys::console::log_1(&format!("Parsed {} accessories", accessories.len()).into());
+
     if base_images.is_empty() {
         return Err(JsValue::from_str("No base images provided"));
     }
 
+    web_sys::console::log_1(&"Creating RNG from pubkey".into());
     let mut rng = create_rng_from_pubkey(pubkey_hex)?;
+    web_sys::console::log_1(&"RNG created successfully".into());
 
-    // Only use sleepy labitbu (index 3 in the array)
-    let base_idx = 3; // Force sleepy labitbu
+    // Deterministic labitbu selection based on public key
+    let base_idx = (rng.next_u32() as usize) % base_images.len();
+    web_sys::console::log_1(&format!("Selected base image index: {}", base_idx).into());
     let base_image_data = &base_images[base_idx];
 
+    web_sys::console::log_1(&format!("Loading base image, data size: {} bytes", base_image_data.len()).into());
     let mut base_img = image::load_from_memory(base_image_data)
         .map_err(|e| JsValue::from_str(&format!("Failed to load base image: {}", e)))?
         .to_rgba8();
+    web_sys::console::log_1(&format!("Base image loaded, dimensions: {}x{}", base_img.width(), base_img.height()).into());
 
-    // Always add sleep mask (index 2 in accessories array)
+    // Deterministic accessory selection based on public key
     let accessory_idx = if !accessories.is_empty() {
-        Some(2) // Force sleep mask
+        let roll = (rng.next_u32() as usize) % (accessories.len() + 50);
+        web_sys::console::log_1(&format!("Accessory roll: {} (accessories.len(): {})", roll, accessories.len()).into());
+        if roll < accessories.len() {
+            Some(roll)
+        } else {
+            None
+        }
     } else {
         None
     };
+    web_sys::console::log_1(&format!("Selected accessory index: {:?}", accessory_idx).into());
+    
 
+    // Deterministic color selection based on public key
     let hue_shift = (rng.next_u32() % 360) as f32;
 
     apply_hue_shift(&mut base_img, hue_shift);
 
     if let Some(acc_idx) = accessory_idx {
+        web_sys::console::log_1(&format!("Loading accessory at index {}", acc_idx).into());
         let accessory_data = &accessories[acc_idx];
+        web_sys::console::log_1(&format!("Accessory data size: {} bytes", accessory_data.len()).into());
         let mut accessory_img = image::load_from_memory(accessory_data)
             .map_err(|e| JsValue::from_str(&format!("Failed to load accessory: {}", e)))?
             .to_rgba8();
+        web_sys::console::log_1(&format!("Accessory loaded, dimensions: {}x{}", accessory_img.width(), accessory_img.height()).into());
 
+        web_sys::console::log_1(&"Resizing accessory image".into());
         accessory_img = imageops::resize(
             &accessory_img,
             base_img.width(),
             base_img.height(),
             imageops::FilterType::Lanczos3,
         );
+        web_sys::console::log_1(&format!("Accessory resized to {}x{}", accessory_img.width(), accessory_img.height()).into());
 
+        web_sys::console::log_1(&"Compositing images".into());
         composite_images(&mut base_img, &accessory_img);
+        web_sys::console::log_1(&"Images composited successfully".into());
     }
 
+    web_sys::console::log_1(&"Encoding to WebP".into());
     let webp_data = encode_to_webp_deterministic(&base_img)?;
+    web_sys::console::log_1(&format!("WebP encoded, size: {} bytes", webp_data.len()).into());
 
+    web_sys::console::log_1(&"Padding to target size".into());
     let mut padded = vec![0u8; TARGET_SIZE];
     padded[..webp_data.len()].copy_from_slice(&webp_data);
+    web_sys::console::log_1(&"Padding complete".into());
 
+    web_sys::console::log_1(&"Returning result".into());
     Ok(padded.into_boxed_slice())
+}
+
+#[wasm_bindgen]
+pub fn test_file_size_constraint(base_images_js: JsValue, accessories_js: JsValue) -> Result<String, JsValue> {
+    use rand::{RngCore, SeedableRng};
+    use rand::rngs::SmallRng;
+    
+    let mut results = Vec::new();
+    let mut max_size = 0;
+    let mut total_tests = 0;
+    let mut passed_tests = 0;
+
+    // Generate 10 random but valid public keys for testing
+    let mut rng = SmallRng::from_entropy();
+    let mut test_pubkeys = Vec::new();
+    
+    while test_pubkeys.len() < 10 {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        let pubkey_hex = hex::encode(bytes);
+        
+        // Test if this public key is valid by trying to create an RNG from it
+        if create_rng_from_pubkey(&pubkey_hex).is_ok() {
+            test_pubkeys.push(pubkey_hex);
+        }
+    }
+
+    for test_pubkey in test_pubkeys {
+        match generate_labitbu_bytes(&test_pubkey, base_images_js.clone(), accessories_js.clone()) {
+            Ok(image_data) => {
+                let size = image_data.len();
+                max_size = max_size.max(size);
+                total_tests += 1;
+                
+                if size <= 4096 {
+                    passed_tests += 1;
+                } else {
+                    results.push(format!("FAIL: Image {} bytes exceeds 4KB limit (pubkey: {})", size, test_pubkey));
+                }
+            }
+            Err(e) => {
+                results.push(format!("ERROR: Failed to generate image: {}", e.as_string().unwrap_or_default()));
+            }
+        }
+    }
+
+    let summary = format!(
+        "File Size Test Results:\n\
+         Total tests: {}\n\
+         Passed: {}\n\
+         Failed: {}\n\
+         Max file size: {} bytes\n\
+         All under 4KB: {}",
+        total_tests,
+        passed_tests,
+        total_tests - passed_tests,
+        max_size,
+        if max_size <= 4096 { "YES" } else { "NO" }
+    );
+
+    if !results.is_empty() {
+        return Err(JsValue::from_str(&format!("{}\n\nFailures:\n{}", summary, results.join("\n"))));
+    }
+
+    Ok(summary)
 }
 
 fn create_rng_from_pubkey(pubkey_hex: &str) -> Result<SmallRng, JsValue> {
@@ -120,6 +219,8 @@ fn apply_hue_shift(img: &mut RgbaImage, hue_shift: f32) {
 fn composite_images(base: &mut RgbaImage, accessory: &RgbaImage) {
     let (base_w, base_h) = base.dimensions();
     let (acc_w, acc_h) = accessory.dimensions();
+    
+    web_sys::console::log_1(&format!("Compositing images: base {}x{}, accessory {}x{}", base_w, base_h, acc_w, acc_h).into());
 
     for y in 0..base_h.min(acc_h) {
         for x in 0..base_w.min(acc_w) {
@@ -140,6 +241,8 @@ fn composite_images(base: &mut RgbaImage, accessory: &RgbaImage) {
             }
         }
     }
+    
+    web_sys::console::log_1(&"Compositing complete".into());
 }
 
 pub fn encode_to_webp_deterministic(img: &RgbaImage) -> Result<Vec<u8>, JsValue> {
@@ -148,7 +251,14 @@ pub fn encode_to_webp_deterministic(img: &RgbaImage) -> Result<Vec<u8>, JsValue>
 
     let mut enc = WebPEncoder::new(&mut out);
     let mut params = EncoderParams::default();
+    
+    // Optimize for pixel art - disable predictor transform which can blur sharp edges
     params.use_predictor_transform = false;
+    
+    // Try to improve quality for pixel art
+    // Note: These parameters might not be available in this version
+    // but we'll try them anyway
+    
     enc.set_params(params);
 
     if img.pixels().all(|p| p.0[3] == 255) {

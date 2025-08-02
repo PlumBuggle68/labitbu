@@ -63,7 +63,7 @@
          data-show-count="true" aria-label="Star stutxo/labitbu on GitHub">Star</a>
     </div>
 
-    <p style="text-align:center;color:#333;font-size:0.9rem;">Only sleepy labitbu's with sleep masks are being minted now. These tired little creatures are hiding in the merkle forest, can you find them all? Some say they hide in a mysterious place called control block 128</p>
+    <p style="text-align:center;color:#333;font-size:0.9rem;">Each public key generates a unique, deterministic labitbu! The base type, accessories, and colors are all determined by your public key. Click the test button to see different variations. Some say they hide in a mysterious place called control block 128</p>
 
     <div style="text-align: center;">
       <div style="color:#333;font-size:0.7rem;margin:0 auto 1rem auto; display: inline-block; text-align: left;">
@@ -83,6 +83,8 @@
 
     <p style="text-align:center;margin:2rem 0">
       <button id="connect-btn">Connect Xverse</button>
+              <button id="test-btn" style="background-color: #17a2b8;">Test Generate Labitbu</button>
+        <button id="size-test-btn" style="background-color: #28a745; margin-left: 10px;">Test File Size (4KB)</button>
     </p>
     <p id="connect-error" style="color:red;text-align:center;min-height:1em;"></p>
 
@@ -114,18 +116,21 @@
 
   <script type="module">
     import { request, AddressPurpose, RpcErrorCode } from 'https://esm.sh/sats-connect';
-    import initWasm, { create_deposit_address, mint, generate_labitbu_bytes } from './pkg/labitbu.js';
+    import initWasm, { create_deposit_address, mint, generate_labitbu_bytes, test_file_size_constraint } from './pkg/labitbu.js';
     import mempoolJS from 'https://esm.sh/@mempool/mempool.js';
     import { Buffer } from 'https://esm.sh/buffer';
 
     const { labitbus, accessories } = await (await fetch('/labitbu-traits.json')).json();
     const baseImageBytes = Object.values(labitbus).map(hexToBytes);
+    
     const accessoryBytes = Object.values(accessories).map(hexToBytes);
     await initWasm();
 
     const { bitcoin:{ addresses, transactions, fees } } = mempoolJS({ hostname:'mempool.space' });
 
     const $connectBtn  = document.getElementById('connect-btn');
+    const $testBtn     = document.getElementById('test-btn');
+    console.log('Test button element:', $testBtn);
     const $depositBtn  = document.getElementById('deposit-btn');
     const $mintBtn     = document.getElementById('mint-btn');
     const destInput    = document.getElementById('destination-address');
@@ -214,8 +219,13 @@
 
         const img = document.createElement('img');
         img.src = url;
-        img.style.maxWidth = '100%';
+        img.style.maxWidth = '400px';
+        img.style.width = '400px';
+        img.style.height = 'auto';
         img.style.marginTop = '1rem';
+        img.style.imageRendering = 'pixelated';
+        img.style.imageRendering = '-moz-crisp-edges';
+        img.style.imageRendering = 'crisp-edges';
 
         const displayDiv = document.getElementById('display-labitbu');
         displayDiv.innerHTML = '';
@@ -233,6 +243,73 @@
       } catch (e) {
         console.error(e);
         alert(e.message || 'Wallet connect failed');
+      }
+    };
+
+    $testBtn.onclick = async () => {
+      console.log('Test button clicked!');
+      try {
+        // Generate a random public key for testing
+        const randomBytes = new Uint8Array(32);
+        crypto.getRandomValues(randomBytes);
+        const testPubkey = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        console.log('Generated test pubkey:', testPubkey);
+        
+        let testByteArray;
+        try {
+          testByteArray = generate_labitbu_bytes(
+            testPubkey,
+            baseImageBytes,
+            accessoryBytes
+          );
+        } catch (e) {
+          connectErrElem.style.color = 'red';
+          connectErrElem.textContent =
+            typeof e === 'string'
+              ? e
+              : e?.message || e?.toString() || 'Unknown generation error';
+          return;
+        }
+
+        const blob = new Blob([testByteArray], { type: 'image/webp' });
+        const url = URL.createObjectURL(blob);
+
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.maxWidth = '400px';
+        img.style.width = '400px';
+        img.style.height = 'auto';
+        img.style.marginTop = '1rem';
+        img.style.imageRendering = 'pixelated';
+        img.style.imageRendering = '-moz-crisp-edges';
+        img.style.imageRendering = 'crisp-edges';
+
+        const displayDiv = document.getElementById('display-labitbu');
+        displayDiv.innerHTML = '';
+        displayDiv.appendChild(img);
+
+        connectErrElem.style.color = 'green';
+        connectErrElem.textContent = 'Test labitbu generated successfully!';
+      } catch (e) {
+        console.error(e);
+        connectErrElem.style.color = 'red';
+        connectErrElem.textContent = e.message || 'Test generation failed';
+      }
+    };
+
+    // File size test button
+    const $sizeTestBtn = document.getElementById('size-test-btn');
+    $sizeTestBtn.onclick = async () => {
+      console.log('File size test clicked!');
+      try {
+        const result = await test_file_size_constraint(baseImageBytes, accessoryBytes);
+        console.log('File size test result:', result);
+        connectErrElem.style.color = 'green';
+        connectErrElem.textContent = 'File size test passed: ' + result;
+      } catch (error) {
+        console.error('File size test failed:', error);
+        connectErrElem.style.color = 'red';
+        connectErrElem.textContent = 'File size test failed: ' + error;
       }
     };
 
